@@ -183,7 +183,7 @@ module Resque
             rescue SystemCallError
               nil
             end
-            job.fail(DirtyExit.new($?.to_s)) if $?.signaled?
+            report_failed_job(job,DirtyExit.new($?.to_s)) if $?.signaled?
           else
             unregister_signal_handlers if will_fork? && term_child
             begin
@@ -214,6 +214,7 @@ module Resque
     rescue Exception => exception
       unless exception.class == SystemExit && !@child && run_at_exit_hooks
         log "Failed to start worker : #{exception.inspect}"
+        log exception.backtrace.join("\n")
 
         unregister_worker(exception)
       end
@@ -238,10 +239,18 @@ module Resque
         job.fail(exception)
       rescue Object => exception
         log "Received exception when reporting failure: #{exception.inspect}"
+        if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
+          reconnect
+          retry
+        end
       end
       begin
         failed!
       rescue Object => exception
+        if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
+          reconnect
+          retry
+        end
         log "Received exception when increasing failed jobs counter (redis issue) : #{exception.inspect}"
       end
     end
@@ -571,15 +580,31 @@ module Resque
         :queue   => job.queue,
         :run_at  => Time.now.utc.iso8601,
         :payload => job.payload
-      redis.set("worker:#{self}", data)
+      begin
+        redis.set("worker:#{self}", data)
+      rescue Object => exception
+        if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
+          reconnect
+          retry
+        end
+      end
     end
 
     # Called when we are done working - clears our `working_on` state
     # and tells Redis we processed a job.
     def done_working
-      redis.pipelined do
-        processed!
-        redis.del("worker:#{self}")
+      stats_recorded = false
+      begin 
+        redis.pipelined do
+          processed! unless stats_recorded
+          stats_recorded = true
+          redis.del("worker:#{self}")
+        end
+      rescue Object => exception
+        if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
+          reconnect
+          retry
+        end
       end
     end
 
