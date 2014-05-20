@@ -240,16 +240,16 @@ module Resque
       rescue Object => exception
         log "Received exception when reporting failure: #{exception.inspect}"
         if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
-          reconnect
-          retry
+          reconnected = reconnect rescue false
+          retry if reconnected
         end
       end
       begin
         failed!
       rescue Object => exception
         if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
-          reconnect
-          retry
+          reconnected = reconnect rescue false
+          retry if reconnected
         end
         log "Received exception when increasing failed jobs counter (redis issue) : #{exception.inspect}"
       end
@@ -279,16 +279,15 @@ module Resque
           return job
         end
       end
-
       nil
     rescue Exception => e
       log "Error reserving job: #{e.inspect}"
       if e.message =~ /READONLY/
-        reconnect
-        retry
+        reconnected = reconnect rescue false
+        retry if reconnected
       end
       log e.backtrace.join("\n")
-      raise e
+      nil
     end
 
     # Reconnect to Redis to avoid sharing a connection with the parent,
@@ -588,8 +587,8 @@ module Resque
         redis.set("worker:#{self}", data)
       rescue Object => exception
         if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
-          reconnect
-          retry
+          reconnected = reconnect rescue false
+          retry if reconnected
         end
       end
     end
@@ -606,8 +605,8 @@ module Resque
         end
       rescue Object => exception
         if (exception.respond_to?(:message) && exception.message =~ /READONLY/)
-          reconnect
-          retry
+          reconnected = reconnect rescue false
+          retry if reconnected
         end
       end
     end
